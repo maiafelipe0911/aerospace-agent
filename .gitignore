@@ -1,0 +1,30 @@
+# API keys
+key.env
+.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Platform-specific binaries (built per-platform)
+*.dll
+*.so
+*.dylib
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/

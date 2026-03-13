@@ -1,47 +1,128 @@
-import ollama
+"""
+ARIA CLI — multi-provider interactive agent.
 
-# 1. O Manual de Instruções da Ferramenta 
-ferramenta_altitudes = {
-  'type': 'function',
-  'function': {
-    'name': 'extrair_altitudes',
-    'description': 'Extrai a altitude de origem e a altitude de destino em km.',
-    'parameters': {
-      'type': 'object',
-      'properties': {
-        'origem_km': {
-          'type': 'number',
-          'description': 'A altitude atual do satelite em km',
-        },
-        'destino_km': {
-          'type': 'number',
-          'description': 'A altitude para a qual o satelite deve go em km',
-        },
-      },
-      'required': ['origem_km', 'destino_km'],
-    },
-  },
+Usage:
+    python agent.py                        # default: Gemini
+    python agent.py --provider claude
+    python agent.py --provider openai
+    python agent.py --provider gemini --model gemini-2.5-pro
+"""
+
+import argparse
+import os
+import sys
+
+from dotenv import load_dotenv
+
+from point import OrbitalEngine
+from backend.llm import get_provider
+from backend.core.tools import TOOL_DEFINITIONS, TOOL_STATUS_MESSAGES, SYSTEM_PROMPT, dispatch_tool
+
+# ── Default models per provider ──────────────────────────────────────────
+
+DEFAULT_MODELS = {
+    "gemini": "gemini-2.5-flash",
+    "claude": "claude-sonnet-4-6",
+    "openai": "gpt-4o",
 }
 
-mensagem_usuario = "Fala controle da missão, preciso calcular o combustível pra levar um satélite que tá a 400km de altura para a órbita geoestacionária que fica a 35786km."
-print(f"Usuário: {mensagem_usuario}")
-print("IA Local Pensando...\n")
+# ── Provider → env-var mapping ───────────────────────────────────────────
 
-# 2. Chamando o Cérebro Local
-# O Llama 3.1 vai processar isso usando o seu próprio hardware!
-resposta = ollama.chat(
-    model='llama3.1', 
-    messages=[{'role': 'user', 'content': mensagem_usuario}],
-    tools=[ferramenta_altitudes]
-)
+KEY_ENV_VARS = {
+    "gemini": "GEMINI_API_KEY",
+    "claude": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
 
-# 3. Lendo o Resultado
-if resposta.get('message', {}).get('tool_calls'):
-    for chamada in resposta['message']['tool_calls']:
-        print(f"Sucesso! IA Local acionou a ferramenta: {chamada['function']['name']}")
-        print("Parâmetros extraídos:")
-        for parametro, valor in chamada['function']['arguments'].items():
-            print(f" -> {parametro}: {valor}")
-else:
-    print("A IA Local apenas respondeu em texto (ou não usou a ferramenta):")
-    print(resposta['message']['content'])
+
+def main():
+    parser = argparse.ArgumentParser(description="ARIA — Aerospace Reasoning & Intelligence Agent (CLI)")
+    parser.add_argument("--provider", default="gemini", choices=["gemini", "claude", "openai"],
+                        help="LLM provider (default: gemini)")
+    parser.add_argument("--model", default=None,
+                        help="Model name (default: provider-specific)")
+    args = parser.parse_args()
+
+    provider_id = args.provider
+    model = args.model or DEFAULT_MODELS.get(provider_id, "")
+
+    # Load API key from key.env
+    load_dotenv("key.env")
+    env_var = KEY_ENV_VARS.get(provider_id)
+    api_key = os.getenv(env_var) if env_var else None
+
+    if not api_key:
+        print(f"Error: {env_var} not found in key.env or environment.")
+        sys.exit(1)
+
+    # Initialize engine and provider
+    engine = OrbitalEngine()
+    provider = get_provider(provider_id)
+
+    print("=" * 55)
+    print("  ARIA — Aerospace Reasoning & Intelligence Agent")
+    print(f"  Provider: {provider_id} | Model: {model}")
+    print("=" * 55)
+    print("  Agent ready. Type 'exit' to quit.")
+    print("=" * 55)
+
+    history: list[dict] = []
+
+    while True:
+        print()
+        try:
+            user_input = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        if not user_input:
+            continue
+        if user_input.lower() in ("exit", "quit", "bye"):
+            print("\nShutting down ARIA. See you on the next mission!")
+            break
+
+        print("\nARIA: Analyzing request...")
+
+        tools = provider.translate_tools(TOOL_DEFINITIONS)
+        messages = provider.build_messages(history, user_input)
+
+        max_tool_rounds = 5
+        response = None
+
+        for _round in range(max_tool_rounds + 1):
+            response = provider.generate(messages, tools, api_key, model)
+            tool_calls = provider.parse_tool_calls(response)
+
+            if not tool_calls:
+                break
+
+            provider.append_assistant_turn(messages, response)
+
+            results: list[tuple[str, str, dict]] = []
+            for tc in tool_calls:
+                status_msg = TOOL_STATUS_MESSAGES.get(tc.name, f"Running {tc.name}...")
+                print(f"\n  >> {status_msg}")
+                print(f"     Tool: {tc.name} | Args: {tc.args}")
+
+                result = dispatch_tool(tc.name, tc.args, engine)
+                print(f"     Result: {result}")
+                results.append((tc.name, tc.call_id, result))
+
+            provider.append_tool_results(messages, results)
+
+        if response is None:
+            print("ARIA: I'm sorry, I couldn't generate a response. Please try again.")
+            continue
+
+        final_text = provider.extract_text(response)
+        if final_text:
+            print(f"\nARIA: {final_text}")
+            history.append({"role": "user", "text": user_input})
+            history.append({"role": "model", "text": final_text})
+        else:
+            print("ARIA: I'm sorry, I couldn't generate a response. Please try again.")
+
+
+if __name__ == "__main__":
+    main()
