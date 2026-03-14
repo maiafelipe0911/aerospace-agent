@@ -65,7 +65,7 @@ Aria has an online page in https://aria-zzkp.onrender.com/, feel free to explore
 
 ```bash
 # Clone the repo
-git clone https://github.com/your-username/aria.git
+git clone [https://github.com/your-username/aria](https://github.com/maiafelipe0911/aerospace-agent).git
 cd aria
 
 # Copy environment template
